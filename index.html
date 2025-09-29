@@ -731,3 +731,648 @@
 
         const manifestBlob = new Blob([JSON.stringify(manifest)], { type: 'application/json' });
         const manifestURL = URL.createObjectURL(manifestBlob);
+        document.getElementById('manifest-link').setAttribute('href', manifestURL);
+
+        // App State
+        let checkins = JSON.parse(localStorage.getItem('energyCheckins') || '[]');
+        let settings = JSON.parse(localStorage.getItem('energySettings') || '{"notifications": true, "wakeTime": "05:30", "bedTime": "22:00"}');
+        let cachedWeather = JSON.parse(localStorage.getItem('cachedWeather') || 'null');
+
+        // Energy level descriptions
+        const energyDescriptions = {
+            1: "Very low energy — Yawning very frequently, reaching for caffeine/sugar, extreme difficulty keeping eyes open",
+            2: "Low energy — Yawning frequently, reaching for caffeine/sugar, feeling like you could fall asleep",
+            3: "Low energy — Yawning frequently, reaching for caffeine/sugar, feeling like you could fall asleep", 
+            4: "Moderate energy — Yawning triggered by others, reaching for caffeine as pick-me-up, awake but not alert",
+            5: "Moderate energy — Yawning triggered by others, reaching for caffeine as pick-me-up, awake but not alert",
+            6: "Adequate energy — No yawning, reaching for caffeine for pleasure, awake and alert",
+            7: "Adequate energy — No yawning, reaching for caffeine for pleasure, awake and alert",
+            8: "High energy — Yawning unthinkable, no need for caffeine, wide-awake and alert",
+            9: "High energy — Yawning unthinkable, no need for caffeine, wide-awake and alert",
+            10: "Maximum energy — Yawning unthinkable, caffeine uncomfortable, eyes bright, brimming with alertness"
+        };
+
+        const bedtimeDescriptions = {
+            1: "Wide-awake — There is no way possible I could sleep now",
+            2: "Wide-awake — There is no way possible I could sleep now",
+            3: "Awake — I'm nowhere close to feeling sleepy; it'll be hours before I am",
+            4: "Awake — I'm nowhere close to feeling sleepy; it'll be hours before I am",
+            5: "Tired and wired — I'm dragging, but I'm too full of nervous energy to sleep yet",
+            6: "Tired and wired — I'm dragging, but I'm too full of nervous energy to sleep yet",
+            7: "Tired — I'm yawning and my eyelids feel heavy. Bed is calling",
+            8: "Tired — I'm yawning and my eyelids feel heavy. Bed is calling",
+            9: "Very tired — I know that I will pass out within minutes of my head hitting the pillow",
+            10: "Very tired — I know that I will pass out within minutes of my head hitting the pillow"
+        };
+
+        // Online/Offline status
+        function updateOnlineStatus() {
+            const statusEl = document.getElementById('connection-status');
+            if (navigator.onLine) {
+                statusEl.innerHTML = '<span class="online-badge">● Online</span>';
+                getWeatherData(); // Refresh weather when online
+            } else {
+                statusEl.innerHTML = '<span class="offline-badge">● Offline Mode</span>';
+            }
+        }
+
+        window.addEventListener('online', updateOnlineStatus);
+        window.addEventListener('offline', updateOnlineStatus);
+
+        // Initialize app
+        document.addEventListener('DOMContentLoaded', function() {
+            initializeApp();
+            requestNotificationPermission();
+            updateCurrentTime();
+            setInterval(updateCurrentTime, 60000);
+            updateOnlineStatus();
+        });
+
+        function initializeApp() {
+            document.getElementById('wake-time').value = settings.wakeTime || '05:30';
+            document.getElementById('bed-time').value = settings.bedTime || '22:00';
+            document.querySelector(`input[name="notifications"][value="${settings.notifications ? 'on' : 'off'}"]`).checked = true;
+
+            setupEventListeners();
+            getWeatherData();
+            
+            if (checkins.length > 0) {
+                updateAnalytics();
+                updateHistory();
+            }
+        }
+
+        function setupEventListeners() {
+            const energySlider = document.getElementById('energy-level');
+            const energyValue = document.getElementById('energy-value');
+            
+            energySlider.addEventListener('input', function() {
+                energyValue.textContent = this.value;
+                updateEnergyDescription();
+            });
+
+            const sleepSlider = document.getElementById('sleep-quality');
+            const sleepValue = document.getElementById('sleep-quality-value');
+            
+            sleepSlider.addEventListener('input', function() {
+                sleepValue.textContent = this.value;
+            });
+
+            const stressSlider = document.getElementById('stress-level');
+            const stressValue = document.getElementById('stress-value');
+            
+            stressSlider.addEventListener('input', function() {
+                stressValue.textContent = this.value;
+            });
+        }
+
+        function updateEnergyDescription() {
+            const energyLevel = parseInt(document.getElementById('energy-level').value);
+            const descElement = document.getElementById('energy-description');
+            const currentHour = new Date().getHours();
+            const bedtimeHour = parseInt(settings.bedTime.split(':')[0]);
+            
+            const isBedtime = Math.abs(currentHour - bedtimeHour) <= 2 || currentHour >= 22 || currentHour <= 6;
+            
+            if (isBedtime) {
+                descElement.textContent = bedtimeDescriptions[energyLevel];
+            } else {
+                descElement.textContent = energyDescriptions[energyLevel];
+            }
+        }
+
+        function updateCurrentTime() {
+            const now = new Date();
+            const timeStr = now.toLocaleTimeString('en-US', { 
+                hour12: false, 
+                hour: '2-digit', 
+                minute: '2-digit' 
+            });
+            
+            document.getElementById('current-time').textContent = timeStr;
+            
+            const nextCheckin = getNextCheckinType();
+            document.getElementById('checkin-type').textContent = nextCheckin;
+        }
+
+        function getNextCheckinType() {
+            const now = new Date();
+            const currentHour = now.getHours();
+            const currentMinute = now.getMinutes();
+            const currentTime = currentHour * 60 + currentMinute;
+            
+            const wakeTime = parseTime(settings.wakeTime);
+            const midMorning = wakeTime + (3.5 * 60);
+            const midAfternoon = 15 * 60;
+            const evening = 18 * 60;
+            const bedTime = parseTime(settings.bedTime);
+            
+            if (currentTime < wakeTime + 30) return "Upon Waking";
+            if (currentTime < midMorning + 30) return "Mid-Morning Check-in";
+            if (currentTime < midAfternoon + 30) return "Mid-Afternoon Check-in";
+            if (currentTime < evening + 30) return "Evening Check-in";
+            if (currentTime < bedTime + 30) return "Bedtime Check-in";
+            return "Next Day Check-in";
+        }
+
+        function parseTime(timeStr) {
+            const [hours, minutes] = timeStr.split(':').map(Number);
+            return hours * 60 + minutes;
+        }
+
+        async function getWeatherData() {
+            if (!navigator.onLine) {
+                displayCachedWeather();
+                return;
+            }
+
+            try {
+                if ("geolocation" in navigator) {
+                    navigator.geolocation.getCurrentPosition(async (position) => {
+                        const lat = position.coords.latitude;
+                        const lon = position.coords.longitude;
+                        
+                        try {
+                            const response = await fetch(`https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}&current_weather=true`);
+                            
+                            if (response.ok) {
+                                const data = await response.json();
+                                const weatherData = {
+                                    temp: Math.round(data.current_weather.temperature),
+                                    code: data.current_weather.weathercode,
+                                    timestamp: Date.now()
+                                };
+                                
+                                cachedWeather = weatherData;
+                                localStorage.setItem('cachedWeather', JSON.stringify(weatherData));
+                                displayWeatherFromData(weatherData);
+                            } else {
+                                displayCachedWeather();
+                            }
+                        } catch (error) {
+                            displayCachedWeather();
+                        }
+                    }, () => {
+                        displayCachedWeather();
+                    });
+                } else {
+                    displayCachedWeather();
+                }
+            } catch (error) {
+                displayCachedWeather();
+            }
+        }
+
+        function displayWeatherFromData(weatherData) {
+            const weatherDisplay = document.getElementById('weather-display');
+            const weatherIcon = document.getElementById('weather-icon');
+            const weatherTemp = document.getElementById('weather-temp');
+            const weatherDesc = document.getElementById('weather-desc');
+            
+            const iconMap = {
+                0: { icon: '☀️', desc: 'Clear sky' },
+                1: { icon: '🌤️', desc: 'Mainly clear' },
+                2: { icon: '⛅', desc: 'Partly cloudy' },
+                3: { icon: '☁️', desc: 'Overcast' },
+                45: { icon: '🌫️', desc: 'Foggy' },
+                48: { icon: '🌫️', desc: 'Foggy' },
+                51: { icon: '🌦️', desc: 'Light drizzle' },
+                61: { icon: '🌧️', desc: 'Light rain' },
+                63: { icon: '🌧️', desc: 'Moderate rain' },
+                65: { icon: '🌧️', desc: 'Heavy rain' },
+                71: { icon: '🌨️', desc: 'Light snow' },
+                95: { icon: '⛈️', desc: 'Thunderstorm' }
+            };
+            
+            const weather = iconMap[weatherData.code] || iconMap[0];
+            
+            weatherIcon.textContent = weather.icon;
+            weatherTemp.textContent = `${weatherData.temp}°C`;
+            weatherDesc.textContent = weather.desc;
+            weatherDisplay.style.display = 'flex';
+        }
+
+        function displayCachedWeather() {
+            if (cachedWeather) {
+                const age = (Date.now() - cachedWeather.timestamp) / (1000 * 60 * 60);
+                if (age < 24) {
+                    displayWeatherFromData(cachedWeather);
+                    const weatherDesc = document.getElementById('weather-desc');
+                    weatherDesc.textContent += ' (cached)';
+                    return;
+                }
+            }
+            
+            displayMockWeather();
+        }
+
+        function displayMockWeather() {
+            const weatherDisplay = document.getElementById('weather-display');
+            const weatherIcon = document.getElementById('weather-icon');
+            const weatherTemp = document.getElementById('weather-temp');
+            const weatherDesc = document.getElementById('weather-desc');
+            
+            weatherIcon.textContent = '🌤️';
+            weatherTemp.textContent = '22°C';
+            weatherDesc.textContent = 'Partly cloudy (estimated)';
+            weatherDisplay.style.display = 'flex';
+        }
+
+        function saveCheckin() {
+            const now = new Date();
+            const energyLevel = parseInt(document.getElementById('energy-level').value);
+            const sleepQuality = parseInt(document.getElementById('sleep-quality').value);
+            const sleepDuration = parseFloat(document.getElementById('sleep-duration').value);
+            const mealType = document.querySelector('input[name="meal-type"]:checked').value;
+            const activity = document.querySelector('input[name="activity"]:checked').value === 'yes';
+            const stressLevel = parseInt(document.getElementById('stress-level').value);
+            
+            const checkin = {
+                id: Date.now(),
+                timestamp: now.toISOString(),
+                energyLevel,
+                sleepQuality,
+                sleepDuration,
+                mealType,
+                activity,
+                stressLevel,
+                weather: {
+                    temp: document.getElementById('weather-temp').textContent,
+                    description: document.getElementById('weather-desc').textContent,
+                    icon: document.getElementById('weather-icon').textContent
+                }
+            };
+            
+            checkins.unshift(checkin);
+            
+            const thirtyDaysAgo = new Date();
+            thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
+            checkins = checkins.filter(c => new Date(c.timestamp) > thirtyDaysAgo);
+            
+            localStorage.setItem('energyCheckins', JSON.stringify(checkins));
+            
+            showAlert('Check-in saved successfully!', 'success');
+            
+            updateAnalytics();
+            updateHistory();
+            resetForm();
+        }
+
+        function resetForm() {
+            document.getElementById('energy-level').value = 5;
+            document.getElementById('energy-value').textContent = 5;
+            document.getElementById('sleep-quality').value = 5;
+            document.getElementById('sleep-quality-value').textContent = 5;
+            document.getElementById('sleep-duration').value = 7;
+            document.getElementById('stress-level').value = 5;
+            document.getElementById('stress-value').textContent = 5;
+            
+            document.getElementById('meal-none').checked = true;
+            document.getElementById('activity-no').checked = true;
+            
+            updateEnergyDescription();
+        }
+
+        function showAlert(message, type = 'success') {
+            const alert = document.createElement('div');
+            alert.className = `alert alert-${type}`;
+            alert.textContent = message;
+            
+            const container = document.querySelector('.container');
+            container.insertBefore(alert, container.firstChild);
+            
+            setTimeout(() => {
+                alert.remove();
+            }, 3000);
+        }
+
+        function showSection(sectionName) {
+            document.querySelectorAll('.section').forEach(section => {
+                section.classList.remove('active');
+            });
+            
+            document.querySelectorAll('.nav-item').forEach(item => {
+                item.classList.remove('active');
+            });
+            
+            document.getElementById(`${sectionName}-section`).classList.add('active');
+            
+            event.target.closest('.nav-item').classList.add('active');
+            
+            if (sectionName === 'analytics') {
+                updateAnalytics();
+            } else if (sectionName === 'history') {
+                updateHistory();
+            }
+        }
+
+        function updateAnalytics() {
+            if (checkins.length === 0) {
+                document.getElementById('avg-energy').textContent = '--';
+                document.getElementById('peak-time').textContent = '--';
+                document.getElementById('low-time').textContent = '--';
+                document.getElementById('sleep-avg').textContent = '--';
+                return;
+            }
+            
+            const avgEnergy = (checkins.reduce((sum, c) => sum + c.energyLevel, 0) / checkins.length).toFixed(1);
+            const avgSleep = (checkins.reduce((sum, c) => sum + c.sleepDuration, 0) / checkins.length).toFixed(1);
+            
+            const timeEnergy = {};
+            checkins.forEach(checkin => {
+                const hour = new Date(checkin.timestamp).getHours();
+                if (!timeEnergy[hour]) {
+                    timeEnergy[hour] = { total: 0, count: 0 };
+                }
+                timeEnergy[hour].total += checkin.energyLevel;
+                timeEnergy[hour].count += 1;
+            });
+            
+            let peakTime = 0, lowTime = 0, peakEnergy = 0, lowEnergy = 10;
+            Object.keys(timeEnergy).forEach(hour => {
+                const avg = timeEnergy[hour].total / timeEnergy[hour].count;
+                if (avg > peakEnergy) {
+                    peakEnergy = avg;
+                    peakTime = hour;
+                }
+                if (avg < lowEnergy) {
+                    lowEnergy = avg;
+                    lowTime = hour;
+                }
+            });
+            
+            document.getElementById('avg-energy').textContent = avgEnergy;
+            document.getElementById('peak-time').textContent = `${peakTime}:00`;
+            document.getElementById('low-time').textContent = `${lowTime}:00`;
+            document.getElementById('sleep-avg').textContent = `${avgSleep}h`;
+            
+            updatePatterns();
+            drawChart();
+        }
+
+        function updatePatterns() {
+            const patternsList = document.getElementById('patterns-list');
+            const patterns = [];
+            
+            if (checkins.length < 3) {
+                patternsList.innerHTML = '<p>Need more data to identify patterns (minimum 3 check-ins)</p>';
+                return;
+            }
+            
+            const last7Days = checkins.filter(c => {
+                const checkDate = new Date(c.timestamp);
+                const weekAgo = new Date();
+                weekAgo.setDate(weekAgo.getDate() - 7);
+                return checkDate > weekAgo;
+            });
+            
+            if (last7Days.length > 0) {
+                const avgEnergy = last7Days.reduce((sum, c) => sum + c.energyLevel, 0) / last7Days.length;
+                const avgSleep = last7Days.reduce((sum, c) => sum + c.sleepDuration, 0) / last7Days.length;
+                const avgStress = last7Days.reduce((sum, c) => sum + c.stressLevel, 0) / last7Days.length;
+                
+                if (avgEnergy >= 7) {
+                    patterns.push("✅ Great energy levels this week!");
+                } else if (avgEnergy <= 4) {
+                    patterns.push("⚠️ Energy levels have been low - consider sleep and stress factors");
+                }
+                
+                if (avgSleep < 6) {
+                    patterns.push("😴 Consider increasing sleep duration");
+                } else if (avgSleep >= 8) {
+                    patterns.push("✅ Excellent sleep duration");
+                }
+                
+                if (avgStress > 7) {
+                    patterns.push("😰 High stress levels detected - consider stress management techniques");
+                }
+                
+                const activeCheckins = last7Days.filter(c => c.activity).length;
+                const activityRate = (activeCheckins / last7Days.length) * 100;
+                
+                if (activityRate > 60) {
+                    patterns.push("🏃‍♂️ Great activity levels!");
+                } else if (activityRate < 30) {
+                    patterns.push("🚶‍♂️ Consider increasing physical activity");
+                }
+            }
+            
+            if (patterns.length === 0) {
+                patterns.push("📊 Continue tracking to identify patterns");
+            }
+            
+            patternsList.innerHTML = patterns.map(p => `<p>${p}</p>`).join('');
+        }
+
+        function drawChart() {
+            const canvas = document.getElementById('energy-chart');
+            const ctx = canvas.getContext('2d');
+            
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            
+            if (checkins.length === 0) {
+                ctx.fillStyle = '#4a5568';
+                ctx.font = '16px -apple-system, BlinkMacSystemFont, sans-serif';
+                ctx.textAlign = 'center';
+                ctx.fillText('No data to display', canvas.width / 2, canvas.height / 2);
+                return;
+            }
+            
+            const last7Days = checkins.filter(c => {
+                const checkDate = new Date(c.timestamp);
+                const weekAgo = new Date();
+                weekAgo.setDate(weekAgo.getDate() - 7);
+                return checkDate > weekAgo;
+            }).reverse();
+            
+            if (last7Days.length === 0) return;
+            
+            const padding = 40;
+            const chartWidth = canvas.width - (padding * 2);
+            const chartHeight = canvas.height - (padding * 2);
+            
+            const xStep = chartWidth / Math.max(last7Days.length - 1, 1);
+            const yScale = chartHeight / 9;
+            
+            ctx.strokeStyle = '#e2e8f0';
+            ctx.lineWidth = 1;
+            
+            for (let i = 1; i <= 10; i++) {
+                const y = padding + (chartHeight - ((i - 1) * yScale));
+                ctx.beginPath();
+                ctx.moveTo(padding, y);
+                ctx.lineTo(padding + chartWidth, y);
+                ctx.stroke();
+                
+                ctx.fillStyle = '#4a5568';
+                ctx.font = '12px -apple-system, BlinkMacSystemFont, sans-serif';
+                ctx.textAlign = 'right';
+                ctx.fillText(i.toString(), padding - 10, y + 4);
+            }
+            
+            ctx.strokeStyle = '#1a365d';
+            ctx.lineWidth = 3;
+            ctx.beginPath();
+            
+            last7Days.forEach((checkin, index) => {
+                const x = padding + (index * xStep);
+                const y = padding + (chartHeight - ((checkin.energyLevel - 1) * yScale));
+                
+                if (index === 0) {
+                    ctx.moveTo(x, y);
+                } else {
+                    ctx.lineTo(x, y);
+                }
+            });
+            
+            ctx.stroke();
+            
+            ctx.fillStyle = '#1a365d';
+            last7Days.forEach((checkin, index) => {
+                const x = padding + (index * xStep);
+                const y = padding + (chartHeight - ((checkin.energyLevel - 1) * yScale));
+                
+                ctx.beginPath();
+                ctx.arc(x, y, 4, 0, 2 * Math.PI);
+                ctx.fill();
+            });
+        }
+
+        function updateHistory() {
+            const historyList = document.getElementById('history-list');
+            
+            if (checkins.length === 0) {
+                historyList.innerHTML = '<p>No check-ins recorded yet.</p>';
+                return;
+            }
+            
+            const recent = checkins.slice(0, 20);
+            
+            historyList.innerHTML = recent.map(checkin => {
+                const date = new Date(checkin.timestamp);
+                const dateStr = date.toLocaleDateString();
+                const timeStr = date.toLocaleTimeString('en-US', { 
+                    hour: '2-digit', 
+                    minute: '2-digit' 
+                });
+                
+                return `
+                    <div class="energy-card" style="margin-bottom: 1rem; text-align: left;">
+                        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.5rem;">
+                            <strong>${dateStr} ${timeStr}</strong>
+                            <span class="energy-value">Energy: ${checkin.energyLevel}/10</span>
+                        </div>
+                        <div style="font-size: 0.9rem; color: var(--text-secondary);">
+                            Sleep: ${checkin.sleepQuality}/10 (${checkin.sleepDuration}h) | 
+                            Stress: ${checkin.stressLevel}/10 | 
+                            Meal: ${checkin.mealType} | 
+                            Activity: ${checkin.activity ? 'Yes' : 'No'}
+                        </div>
+                        <div style="font-size: 0.8rem; color: var(--text-secondary); margin-top: 0.25rem;">
+                            ${checkin.weather.icon} ${checkin.weather.temp} - ${checkin.weather.description}
+                        </div>
+                    </div>
+                `;
+            }).join('');
+        }
+
+        function saveSettings() {
+            settings.wakeTime = document.getElementById('wake-time').value;
+            settings.bedTime = document.getElementById('bed-time').value;
+            settings.notifications = document.querySelector('input[name="notifications"]:checked').value === 'on';
+            
+            localStorage.setItem('energySettings', JSON.stringify(settings));
+            
+            showAlert('Settings saved successfully!', 'success');
+            
+            if (settings.notifications) {
+                scheduleNotifications();
+            }
+        }
+
+        function exportData() {
+            const data = {
+                checkins: checkins,
+                settings: settings,
+                exported: new Date().toISOString()
+            };
+            
+            const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = `energy-tracker-data-${new Date().toISOString().split('T')[0]}.json`;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            URL.revokeObjectURL(url);
+            
+            showAlert('Data exported successfully!', 'success');
+        }
+
+        function clearData() {
+            if (confirm('Are you sure you want to clear all data? This action cannot be undone.')) {
+                checkins = [];
+                localStorage.removeItem('energyCheckins');
+                updateAnalytics();
+                updateHistory();
+                showAlert('All data cleared', 'warning');
+            }
+        }
+
+        async function requestNotificationPermission() {
+            if ('Notification' in window && 'serviceWorker' in navigator) {
+                try {
+                    const permission = await Notification.requestPermission();
+                    if (permission === 'granted') {
+                        scheduleNotifications();
+                    }
+                } catch (error) {
+                    console.log('Notification permission error:', error);
+                }
+            }
+        }
+
+        function scheduleNotifications() {
+            if (!settings.notifications || !('Notification' in window)) return;
+            
+            const now = new Date();
+            const wakeTime = parseTime(settings.wakeTime);
+            const bedTime = parseTime(settings.bedTime);
+            
+            const tomorrow = new Date(now);
+            tomorrow.setDate(tomorrow.getDate() + 1);
+            
+            const notificationTimes = [
+                { time: wakeTime, label: 'Upon Waking' },
+                { time: wakeTime + (3.5 * 60), label: 'Mid-Morning Check-in' },
+                { time: 15 * 60, label: 'Mid-Afternoon Check-in' },
+                { time: 18 * 60, label: 'Evening Check-in' },
+                { time: bedTime, label: 'Bedtime Check-in' }
+            ];
+            
+            notificationTimes.forEach(({ time, label }) => {
+                const notificationTime = new Date(tomorrow);
+                notificationTime.setHours(Math.floor(time / 60));
+                notificationTime.setMinutes(time % 60);
+                notificationTime.setSeconds(0);
+                
+                const delay = notificationTime.getTime() - Date.now();
+                if (delay > 0) {
+                    setTimeout(() => {
+                        if (settings.notifications && Notification.permission === 'granted') {
+                            new Notification('Energy Tracker', {
+                                body: `Time for your ${label.toLowerCase()}`,
+                                icon: 'data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iMTI4IiBoZWlnaHQ9IjEyOCIgdmlld0JveD0iMCAwIDEyOCAxMjgiIGZpbGw9IiMxYTM2NWQiPgogIDxjaXJjbGUgY3g9IjY0IiBjeT0iNjQiIHI9IjIwIi8+PC9zdmc+',
+                                tag: 'energy-checkin'
+                            });
+                        }
+                    }, delay);
+                }
+            });
+        }
+
+        updateEnergyDescription();
+    </script>
+</body>
+</html>
