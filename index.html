@@ -4,8 +4,10 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <meta name="theme-color" content="#1a365d">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
     <title>Energy Tracker</title>
-    <link rel="manifest" href="data:application/json;base64,ewogICJuYW1lIjogIkVuZXJneSBUcmFja2VyIiwKICAic2hvcnRfbmFtZSI6ICJFbmVyZ3lUcmFja2VyIiwKICAiZGVzY3JpcHRpb24iOiAiUHJvZmVzc2lvbmFsIEVuZXJneSBUcmFja2luZyBBcHAiLAogICJzdGFydF91cmwiOiAiLyIsCiAgImRpc3BsYXkiOiAic3RhbmRhbG9uZSIsCiAgImJhY2tncm91bmRfY29sb3IiOiAiI2ZmZmZmZiIsCiAgInRoZW1lX2NvbG9yIjogIiMxYTM2NWQiLAogICJpY29ucyI6IFsKICAgIHsKICAgICAgInNyYyI6ICJkYXRhOmltYWdlL3N2Zyt4bWw7YmFzZTY0LFBITjJaeUIzYVdSMGFEMGlNVEk0SWlCb1pXbG5hSFE5SWpFeU9DSWdkbWxsZDBKdmVEMGlNQ0F3SURFeU9DQXhNamdpSUdacGJHdzlJaU14WVRNMk5XUWlQZ29nSUNCamFYSmpiR1VnWTNnOUlqWTBJaUJqZVQwaU5qUWlJSEk5SWpJd0lpOCtQQzl6ZG1jKyIsCiAgICAgICJzaXplcyI6ICIxMjh4MTI4IiwKICAgICAgInR5cGUiOiAiaW1hZ2Uvc3ZnK3htbCIKICAgIH0KICBdLAogICJvcmllbnRhdGlvbiI6ICJwb3J0cmFpdCIsCiAgImNhdGVnb3JpZXMiOiBbImhlYWx0aGZpdG5lc3MiLCAicHJvZHVjdGl2aXR5Il0KfQ==">
+    <link rel="manifest" id="manifest-link">
     <link rel="apple-touch-icon" href="data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iMTI4IiBoZWlnaHQ9IjEyOCIgdmlld0JveD0iMCAwIDEyOCAxMjgiIGZpbGw9IiMxYTM2NWQiPgogIDxjaXJjbGUgY3g9IjY0IiBjeT0iNjQiIHI9IjIwIi8+PC9zdmc+">
     <style>
         :root {
@@ -53,6 +55,26 @@
         .header h1 {
             font-size: 1.5rem;
             font-weight: 600;
+        }
+
+        .offline-badge {
+            background: var(--warning);
+            color: white;
+            padding: 0.25rem 0.5rem;
+            border-radius: 4px;
+            font-size: 0.75rem;
+            margin-top: 0.25rem;
+            display: inline-block;
+        }
+
+        .online-badge {
+            background: var(--success);
+            color: white;
+            padding: 0.25rem 0.5rem;
+            border-radius: 4px;
+            font-size: 0.75rem;
+            margin-top: 0.25rem;
+            display: inline-block;
         }
 
         .nav {
@@ -391,6 +413,7 @@
 <body>
     <div class="header">
         <h1>Energy Tracker</h1>
+        <div id="connection-status"></div>
     </div>
 
     <div class="container">
@@ -567,6 +590,15 @@
                 <button class="btn btn-secondary" onclick="exportData()">Export Data</button>
                 <button class="btn btn-secondary" onclick="clearData()" style="margin-top: 0.5rem; background: var(--error);">Clear All Data</button>
             </div>
+
+            <div class="card">
+                <div class="card-header">App Info</div>
+                <p style="font-size: 0.9rem; color: var(--text-secondary);">
+                    <strong>Offline Support:</strong> Enabled<br>
+                    <strong>Version:</strong> 1.0.0<br>
+                    <strong>Cache Status:</strong> <span id="cache-status">Checking...</span>
+                </p>
+            </div>
         </div>
     </div>
 
@@ -598,646 +630,104 @@
     </nav>
 
     <script>
-        // App State
-        let checkins = JSON.parse(localStorage.getItem('energyCheckins') || '[]');
-        let settings = JSON.parse(localStorage.getItem('energySettings') || '{"notifications": true, "wakeTime": "05:30", "bedTime": "22:00"}');
-
-        // Energy level descriptions
-        const energyDescriptions = {
-            1: "Very low energy — Yawning very frequently, reaching for caffeine/sugar, extreme difficulty keeping eyes open",
-            2: "Low energy — Yawning frequently, reaching for caffeine/sugar, feeling like you could fall asleep",
-            3: "Low energy — Yawning frequently, reaching for caffeine/sugar, feeling like you could fall asleep", 
-            4: "Moderate energy — Yawning triggered by others, reaching for caffeine as pick-me-up, awake but not alert",
-            5: "Moderate energy — Yawning triggered by others, reaching for caffeine as pick-me-up, awake but not alert",
-            6: "Adequate energy — No yawning, reaching for caffeine for pleasure, awake and alert",
-            7: "Adequate energy — No yawning, reaching for caffeine for pleasure, awake and alert",
-            8: "High energy — Yawning unthinkable, no need for caffeine, wide-awake and alert",
-            9: "High energy — Yawning unthinkable, no need for caffeine, wide-awake and alert",
-            10: "Maximum energy — Yawning unthinkable, caffeine uncomfortable, eyes bright, brimming with alertness"
-        };
-
-        const bedtimeDescriptions = {
-            1: "Wide-awake — There is no way possible I could sleep now",
-            2: "Wide-awake — There is no way possible I could sleep now",
-            3: "Awake — I'm nowhere close to feeling sleepy; it'll be hours before I am",
-            4: "Awake — I'm nowhere close to feeling sleepy; it'll be hours before I am",
-            5: "Tired and wired — I'm dragging, but I'm too full of nervous energy to sleep yet",
-            6: "Tired and wired — I'm dragging, but I'm too full of nervous energy to sleep yet",
-            7: "Tired — I'm yawning and my eyelids feel heavy. Bed is calling",
-            8: "Tired — I'm yawning and my eyelids feel heavy. Bed is calling",
-            9: "Very tired — I know that I will pass out within minutes of my head hitting the pillow",
-            10: "Very tired — I know that I will pass out within minutes of my head hitting the pillow"
-        };
-
-        // Initialize app
-        document.addEventListener('DOMContentLoaded', function() {
-            initializeApp();
-            requestNotificationPermission();
-            updateCurrentTime();
-            setInterval(updateCurrentTime, 60000); // Update every minute
-        });
-
-        function initializeApp() {
-            // Load settings
-            document.getElementById('wake-time').value = settings.wakeTime || '05:30';
-            document.getElementById('bed-time').value = settings.bedTime || '22:00';
-            document.querySelector(`input[name="notifications"][value="${settings.notifications ? 'on' : 'off'}"]`).checked = true;
-
-            // Set up event listeners
-            setupEventListeners();
-            
-            // Get location for weather
-            getWeatherData();
-            
-            // Load analytics if we have data
-            if (checkins.length > 0) {
-                updateAnalytics();
-                updateHistory();
-            }
-        }
-
-        function setupEventListeners() {
-            // Energy level slider
-            const energySlider = document.getElementById('energy-level');
-            const energyValue = document.getElementById('energy-value');
-            const energyDesc = document.getElementById('energy-description');
-            
-            energySlider.addEventListener('input', function() {
-                energyValue.textContent = this.value;
-                updateEnergyDescription();
-            });
-
-            // Sleep quality slider
-            const sleepSlider = document.getElementById('sleep-quality');
-            const sleepValue = document.getElementById('sleep-quality-value');
-            
-            sleepSlider.addEventListener('input', function() {
-                sleepValue.textContent = this.value;
-            });
-
-            // Stress level slider
-            const stressSlider = document.getElementById('stress-level');
-            const stressValue = document.getElementById('stress-value');
-            
-            stressSlider.addEventListener('input', function() {
-                stressValue.textContent = this.value;
+        // Service Worker Registration
+        if ('serviceWorker' in navigator) {
+            window.addEventListener('load', () => {
+                registerServiceWorker();
             });
         }
 
-        function updateEnergyDescription() {
-            const energyLevel = parseInt(document.getElementById('energy-level').value);
-            const descElement = document.getElementById('energy-description');
-            const currentHour = new Date().getHours();
-            const bedtimeHour = parseInt(settings.bedTime.split(':')[0]);
-            
-            // Use bedtime descriptions if it's close to bedtime (within 2 hours)
-            const isBedtime = Math.abs(currentHour - bedtimeHour) <= 2 || currentHour >= 22 || currentHour <= 6;
-            
-            if (isBedtime) {
-                descElement.textContent = bedtimeDescriptions[energyLevel];
-            } else {
-                descElement.textContent = energyDescriptions[energyLevel];
-            }
-        }
-
-        function updateCurrentTime() {
-            const now = new Date();
-            const timeStr = now.toLocaleTimeString('en-US', { 
-                hour12: false, 
-                hour: '2-digit', 
-                minute: '2-digit' 
-            });
-            
-            document.getElementById('current-time').textContent = timeStr;
-            
-            // Determine next check-in
-            const nextCheckin = getNextCheckinType();
-            document.getElementById('checkin-type').textContent = nextCheckin;
-        }
-
-        function getNextCheckinType() {
-            const now = new Date();
-            const currentHour = now.getHours();
-            const currentMinute = now.getMinutes();
-            const currentTime = currentHour * 60 + currentMinute;
-            
-            const wakeTime = parseTime(settings.wakeTime);
-            const midMorning = wakeTime + (3.5 * 60); // 3.5 hours after wake
-            const midAfternoon = 15 * 60; // 3:00 PM
-            const evening = 18 * 60; // 6:00 PM
-            const bedTime = parseTime(settings.bedTime);
-            
-            if (currentTime < wakeTime + 30) return "Upon Waking";
-            if (currentTime < midMorning + 30) return "Mid-Morning Check-in";
-            if (currentTime < midAfternoon + 30) return "Mid-Afternoon Check-in";
-            if (currentTime < evening + 30) return "Evening Check-in";
-            if (currentTime < bedTime + 30) return "Bedtime Check-in";
-            return "Next Day Check-in";
-        }
-
-        function parseTime(timeStr) {
-            const [hours, minutes] = timeStr.split(':').map(Number);
-            return hours * 60 + minutes;
-        }
-
-        async function getWeatherData() {
+        async function registerServiceWorker() {
             try {
-                if ("geolocation" in navigator) {
-                    navigator.geolocation.getCurrentPosition(async (position) => {
-                        const lat = position.coords.latitude;
-                        const lon = position.coords.longitude;
-                        
-                        // Using OpenWeatherMap API (free tier)
-                        // Note: In production, you'd want to use your own API key
-                        const apiKey = 'demo'; // Replace with actual API key
-                        const response = await fetch(`https://api.openweathermap.org/data/2.5/weather?lat=${lat}&lon=${lon}&appid=${apiKey}&units=metric`);
-                        
-                        if (response.ok) {
-                            const data = await response.json();
-                            displayWeather(data);
-                        } else {
-                            // Fallback to mock weather data
-                            displayMockWeather();
-                        }
-                    }, () => {
-                        displayMockWeather();
+                const swCode = `
+                    const CACHE_NAME = 'energy-tracker-v1';
+                    const urlsToCache = [
+                        '/',
+                        '/index.html'
+                    ];
+
+                    self.addEventListener('install', (event) => {
+                        event.waitUntil(
+                            caches.open(CACHE_NAME)
+                                .then((cache) => cache.addAll(urlsToCache))
+                        );
                     });
-                } else {
-                    displayMockWeather();
-                }
-            } catch (error) {
-                displayMockWeather();
-            }
-        }
 
-        function displayWeather(data) {
-            const weatherDisplay = document.getElementById('weather-display');
-            const weatherIcon = document.getElementById('weather-icon');
-            const weatherTemp = document.getElementById('weather-temp');
-            const weatherDesc = document.getElementById('weather-desc');
-            
-            const temp = Math.round(data.main.temp);
-            const description = data.weather[0].description;
-            const iconCode = data.weather[0].icon;
-            
-            // Simple icon mapping
-            const iconMap = {
-                '01d': '☀️', '01n': '🌙', '02d': '⛅', '02n': '☁️',
-                '03d': '☁️', '03n': '☁️', '04d': '☁️', '04n': '☁️',
-                '09d': '🌧️', '09n': '🌧️', '10d': '🌦️', '10n': '🌧️',
-                '11d': '⛈️', '11n': '⛈️', '13d': '🌨️', '13n': '🌨️',
-                '50d': '🌫️', '50n': '🌫️'
-            };
-            
-            weatherIcon.textContent = iconMap[iconCode] || '🌤️';
-            weatherTemp.textContent = `${temp}°C`;
-            weatherDesc.textContent = description.charAt(0).toUpperCase() + description.slice(1);
-            weatherDisplay.style.display = 'flex';
-        }
+                    self.addEventListener('fetch', (event) => {
+                        event.respondWith(
+                            caches.match(event.request)
+                                .then((response) => {
+                                    if (response) {
+                                        return response;
+                                    }
+                                    return fetch(event.request).then((response) => {
+                                        if (!response || response.status !== 200 || response.type !== 'basic') {
+                                            return response;
+                                        }
+                                        const responseToCache = response.clone();
+                                        caches.open(CACHE_NAME)
+                                            .then((cache) => {
+                                                cache.put(event.request, responseToCache);
+                                            });
+                                        return response;
+                                    });
+                                })
+                        );
+                    });
 
-        function displayMockWeather() {
-            const weatherDisplay = document.getElementById('weather-display');
-            const weatherIcon = document.getElementById('weather-icon');
-            const weatherTemp = document.getElementById('weather-temp');
-            const weatherDesc = document.getElementById('weather-desc');
-            
-            weatherIcon.textContent = '🌤️';
-            weatherTemp.textContent = '22°C';
-            weatherDesc.textContent = 'Partly cloudy';
-            weatherDisplay.style.display = 'flex';
-        }
-
-        function saveCheckin() {
-            const now = new Date();
-            const energyLevel = parseInt(document.getElementById('energy-level').value);
-            const sleepQuality = parseInt(document.getElementById('sleep-quality').value);
-            const sleepDuration = parseFloat(document.getElementById('sleep-duration').value);
-            const mealType = document.querySelector('input[name="meal-type"]:checked').value;
-            const activity = document.querySelector('input[name="activity"]:checked').value === 'yes';
-            const stressLevel = parseInt(document.getElementById('stress-level').value);
-            
-            const checkin = {
-                id: Date.now(),
-                timestamp: now.toISOString(),
-                energyLevel,
-                sleepQuality,
-                sleepDuration,
-                mealType,
-                activity,
-                stressLevel,
-                weather: {
-                    temp: document.getElementById('weather-temp').textContent,
-                    description: document.getElementById('weather-desc').textContent,
-                    icon: document.getElementById('weather-icon').textContent
-                }
-            };
-            
-            checkins.unshift(checkin); // Add to beginning of array
-            
-            // Keep only last 30 days of data
-            const thirtyDaysAgo = new Date();
-            thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
-            checkins = checkins.filter(c => new Date(c.timestamp) > thirtyDaysAgo);
-            
-            localStorage.setItem('energyCheckins', JSON.stringify(checkins));
-            
-            // Show success message
-            showAlert('Check-in saved successfully!', 'success');
-            
-            // Update analytics
-            updateAnalytics();
-            updateHistory();
-            
-            // Reset form to defaults
-            resetForm();
-        }
-
-        function resetForm() {
-            document.getElementById('energy-level').value = 5;
-            document.getElementById('energy-value').textContent = 5;
-            document.getElementById('sleep-quality').value = 5;
-            document.getElementById('sleep-quality-value').textContent = 5;
-            document.getElementById('sleep-duration').value = 7;
-            document.getElementById('stress-level').value = 5;
-            document.getElementById('stress-value').textContent = 5;
-            
-            // Reset radio buttons
-            document.getElementById('meal-none').checked = true;
-            document.getElementById('activity-no').checked = true;
-            
-            updateEnergyDescription();
-        }
-
-        function showAlert(message, type = 'success') {
-            const alert = document.createElement('div');
-            alert.className = `alert alert-${type}`;
-            alert.textContent = message;
-            
-            const container = document.querySelector('.container');
-            container.insertBefore(alert, container.firstChild);
-            
-            setTimeout(() => {
-                alert.remove();
-            }, 3000);
-        }
-
-        function showSection(sectionName) {
-            // Hide all sections
-            document.querySelectorAll('.section').forEach(section => {
-                section.classList.remove('active');
-            });
-            
-            // Remove active class from all nav items
-            document.querySelectorAll('.nav-item').forEach(item => {
-                item.classList.remove('active');
-            });
-            
-            // Show selected section
-            document.getElementById(`${sectionName}-section`).classList.add('active');
-            
-            // Add active class to clicked nav item
-            event.target.closest('.nav-item').classList.add('active');
-            
-            // Update content based on section
-            if (sectionName === 'analytics') {
-                updateAnalytics();
-            } else if (sectionName === 'history') {
-                updateHistory();
-            }
-        }
-
-        function updateAnalytics() {
-            if (checkins.length === 0) {
-                document.getElementById('avg-energy').textContent = '--';
-                document.getElementById('peak-time').textContent = '--';
-                document.getElementById('low-time').textContent = '--';
-                document.getElementById('sleep-avg').textContent = '--';
-                return;
-            }
-            
-            // Calculate averages
-            const avgEnergy = (checkins.reduce((sum, c) => sum + c.energyLevel, 0) / checkins.length).toFixed(1);
-            const avgSleep = (checkins.reduce((sum, c) => sum + c.sleepDuration, 0) / checkins.length).toFixed(1);
-            
-            // Find peak and low times
-            const timeEnergy = {};
-            checkins.forEach(checkin => {
-                const hour = new Date(checkin.timestamp).getHours();
-                if (!timeEnergy[hour]) {
-                    timeEnergy[hour] = { total: 0, count: 0 };
-                }
-                timeEnergy[hour].total += checkin.energyLevel;
-                timeEnergy[hour].count += 1;
-            });
-            
-            let peakTime = 0, lowTime = 0, peakEnergy = 0, lowEnergy = 10;
-            Object.keys(timeEnergy).forEach(hour => {
-                const avg = timeEnergy[hour].total / timeEnergy[hour].count;
-                if (avg > peakEnergy) {
-                    peakEnergy = avg;
-                    peakTime = hour;
-                }
-                if (avg < lowEnergy) {
-                    lowEnergy = avg;
-                    lowTime = hour;
-                }
-            });
-            
-            document.getElementById('avg-energy').textContent = avgEnergy;
-            document.getElementById('peak-time').textContent = `${peakTime}:00`;
-            document.getElementById('low-time').textContent = `${lowTime}:00`;
-            document.getElementById('sleep-avg').textContent = `${avgSleep}h`;
-            
-            updatePatterns();
-            drawChart();
-        }
-
-        function updatePatterns() {
-            const patternsList = document.getElementById('patterns-list');
-            const patterns = [];
-            
-            if (checkins.length < 3) {
-                patternsList.innerHTML = '<p>Need more data to identify patterns (minimum 3 check-ins)</p>';
-                return;
-            }
-            
-            // Analyze patterns
-            const last7Days = checkins.filter(c => {
-                const checkDate = new Date(c.timestamp);
-                const weekAgo = new Date();
-                weekAgo.setDate(weekAgo.getDate() - 7);
-                return checkDate > weekAgo;
-            });
-            
-            if (last7Days.length > 0) {
-                const avgEnergy = last7Days.reduce((sum, c) => sum + c.energyLevel, 0) / last7Days.length;
-                const avgSleep = last7Days.reduce((sum, c) => sum + c.sleepDuration, 0) / last7Days.length;
-                const avgStress = last7Days.reduce((sum, c) => sum + c.stressLevel, 0) / last7Days.length;
-                
-                if (avgEnergy >= 7) {
-                    patterns.push("✅ Great energy levels this week!");
-                } else if (avgEnergy <= 4) {
-                    patterns.push("⚠️ Energy levels have been low - consider sleep and stress factors");
-                }
-                
-                if (avgSleep < 6) {
-                    patterns.push("😴 Consider increasing sleep duration");
-                } else if (avgSleep >= 8) {
-                    patterns.push("✅ Excellent sleep duration");
-                }
-                
-                if (avgStress > 7) {
-                    patterns.push("😰 High stress levels detected - consider stress management techniques");
-                }
-                
-                const activeCheckins = last7Days.filter(c => c.activity).length;
-                const activityRate = (activeCheckins / last7Days.length) * 100;
-                
-                if (activityRate > 60) {
-                    patterns.push("🏃‍♂️ Great activity levels!");
-                } else if (activityRate < 30) {
-                    patterns.push("🚶‍♂️ Consider increasing physical activity");
-                }
-            }
-            
-            if (patterns.length === 0) {
-                patterns.push("📊 Continue tracking to identify patterns");
-            }
-            
-            patternsList.innerHTML = patterns.map(p => `<p>${p}</p>`).join('');
-        }
-
-        function drawChart() {
-            const canvas = document.getElementById('energy-chart');
-            const ctx = canvas.getContext('2d');
-            
-            // Clear canvas
-            ctx.clearRect(0, 0, canvas.width, canvas.height);
-            
-            if (checkins.length === 0) {
-                ctx.fillStyle = '#4a5568';
-                ctx.font = '16px -apple-system, BlinkMacSystemFont, sans-serif';
-                ctx.textAlign = 'center';
-                ctx.fillText('No data to display', canvas.width / 2, canvas.height / 2);
-                return;
-            }
-            
-            // Prepare data (last 7 days)
-            const last7Days = checkins.filter(c => {
-                const checkDate = new Date(c.timestamp);
-                const weekAgo = new Date();
-                weekAgo.setDate(weekAgo.getDate() - 7);
-                return checkDate > weekAgo;
-            }).reverse(); // Reverse to show chronological order
-            
-            if (last7Days.length === 0) return;
-            
-            // Chart dimensions
-            const padding = 40;
-            const chartWidth = canvas.width - (padding * 2);
-            const chartHeight = canvas.height - (padding * 2);
-            
-            // Scales
-            const xStep = chartWidth / Math.max(last7Days.length - 1, 1);
-            const yScale = chartHeight / 9; // Energy scale 1-10
-            
-            // Draw grid lines
-            ctx.strokeStyle = '#e2e8f0';
-            ctx.lineWidth = 1;
-            
-            // Horizontal grid lines (energy levels)
-            for (let i = 1; i <= 10; i++) {
-                const y = padding + (chartHeight - ((i - 1) * yScale));
-                ctx.beginPath();
-                ctx.moveTo(padding, y);
-                ctx.lineTo(padding + chartWidth, y);
-                ctx.stroke();
-                
-                // Labels
-                ctx.fillStyle = '#4a5568';
-                ctx.font = '12px -apple-system, BlinkMacSystemFont, sans-serif';
-                ctx.textAlign = 'right';
-                ctx.fillText(i.toString(), padding - 10, y + 4);
-            }
-            
-            // Draw energy line
-            ctx.strokeStyle = '#1a365d';
-            ctx.lineWidth = 3;
-            ctx.beginPath();
-            
-            last7Days.forEach((checkin, index) => {
-                const x = padding + (index * xStep);
-                const y = padding + (chartHeight - ((checkin.energyLevel - 1) * yScale));
-                
-                if (index === 0) {
-                    ctx.moveTo(x, y);
-                } else {
-                    ctx.lineTo(x, y);
-                }
-            });
-            
-            ctx.stroke();
-            
-            // Draw data points
-            ctx.fillStyle = '#1a365d';
-            last7Days.forEach((checkin, index) => {
-                const x = padding + (index * xStep);
-                const y = padding + (chartHeight - ((checkin.energyLevel - 1) * yScale));
-                
-                ctx.beginPath();
-                ctx.arc(x, y, 4, 0, 2 * Math.PI);
-                ctx.fill();
-            });
-        }
-
-        function updateHistory() {
-            const historyList = document.getElementById('history-list');
-            
-            if (checkins.length === 0) {
-                historyList.innerHTML = '<p>No check-ins recorded yet.</p>';
-                return;
-            }
-            
-            const recent = checkins.slice(0, 20); // Show last 20 check-ins
-            
-            historyList.innerHTML = recent.map(checkin => {
-                const date = new Date(checkin.timestamp);
-                const dateStr = date.toLocaleDateString();
-                const timeStr = date.toLocaleTimeString('en-US', { 
-                    hour: '2-digit', 
-                    minute: '2-digit' 
-                });
-                
-                return `
-                    <div class="energy-card" style="margin-bottom: 1rem; text-align: left;">
-                        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.5rem;">
-                            <strong>${dateStr} ${timeStr}</strong>
-                            <span class="energy-value">Energy: ${checkin.energyLevel}/10</span>
-                        </div>
-                        <div style="font-size: 0.9rem; color: var(--text-secondary);">
-                            Sleep: ${checkin.sleepQuality}/10 (${checkin.sleepDuration}h) | 
-                            Stress: ${checkin.stressLevel}/10 | 
-                            Meal: ${checkin.mealType} | 
-                            Activity: ${checkin.activity ? 'Yes' : 'No'}
-                        </div>
-                        <div style="font-size: 0.8rem; color: var(--text-secondary); margin-top: 0.25rem;">
-                            ${checkin.weather.icon} ${checkin.weather.temp} - ${checkin.weather.description}
-                        </div>
-                    </div>
+                    self.addEventListener('activate', (event) => {
+                        const cacheWhitelist = [CACHE_NAME];
+                        event.waitUntil(
+                            caches.keys().then((cacheNames) => {
+                                return Promise.all(
+                                    cacheNames.map((cacheName) => {
+                                        if (cacheWhitelist.indexOf(cacheName) === -1) {
+                                            return caches.delete(cacheName);
+                                        }
+                                    })
+                                );
+                            })
+                        );
+                    });
                 `;
-            }).join('');
-        }
-
-        function saveSettings() {
-            settings.wakeTime = document.getElementById('wake-time').value;
-            settings.bedTime = document.getElementById('bed-time').value;
-            settings.notifications = document.querySelector('input[name="notifications"]:checked').value === 'on';
-            
-            localStorage.setItem('energySettings', JSON.stringify(settings));
-            
-            showAlert('Settings saved successfully!', 'success');
-            
-            // Update notifications
-            if (settings.notifications) {
-                scheduleNotifications();
-            } else {
-                clearNotifications();
-            }
-        }
-
-        function exportData() {
-            const data = {
-                checkins: checkins,
-                settings: settings,
-                exported: new Date().toISOString()
-            };
-            
-            const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
-            const url = URL.createObjectURL(blob);
-            const a = document.createElement('a');
-            a.href = url;
-            a.download = `energy-tracker-data-${new Date().toISOString().split('T')[0]}.json`;
-            document.body.appendChild(a);
-            a.click();
-            document.body.removeChild(a);
-            URL.revokeObjectURL(url);
-            
-            showAlert('Data exported successfully!', 'success');
-        }
-
-        function clearData() {
-            if (confirm('Are you sure you want to clear all data? This action cannot be undone.')) {
-                checkins = [];
-                localStorage.removeItem('energyCheckins');
-                updateAnalytics();
-                updateHistory();
-                showAlert('All data cleared', 'warning');
-            }
-        }
-
-        async function requestNotificationPermission() {
-            if ('Notification' in window && 'serviceWorker' in navigator) {
-                try {
-                    const permission = await Notification.requestPermission();
-                    if (permission === 'granted') {
-                        scheduleNotifications();
-                    }
-                } catch (error) {
-                    console.log('Notification permission error:', error);
-                }
-            }
-        }
-
-        function scheduleNotifications() {
-            if (!settings.notifications || !('Notification' in window)) return;
-            
-            // This is a simplified notification system
-            // In a full PWA, you'd use service workers for background notifications
-            
-            const now = new Date();
-            const wakeTime = parseTime(settings.wakeTime);
-            const bedTime = parseTime(settings.bedTime);
-            
-            // Schedule notifications for next day
-            const tomorrow = new Date(now);
-            tomorrow.setDate(tomorrow.getDate() + 1);
-            
-            const notificationTimes = [
-                { time: wakeTime, label: 'Upon Waking' },
-                { time: wakeTime + (3.5 * 60), label: 'Mid-Morning Check-in' },
-                { time: 15 * 60, label: 'Mid-Afternoon Check-in' },
-                { time: 18 * 60, label: 'Evening Check-in' },
-                { time: bedTime, label: 'Bedtime Check-in' }
-            ];
-            
-            notificationTimes.forEach(({ time, label }) => {
-                const notificationTime = new Date(tomorrow);
-                notificationTime.setHours(Math.floor(time / 60));
-                notificationTime.setMinutes(time % 60);
-                notificationTime.setSeconds(0);
                 
-                const delay = notificationTime.getTime() - Date.now();
-                if (delay > 0) {
-                    setTimeout(() => {
-                        if (settings.notifications && Notification.permission === 'granted') {
-                            new Notification('Energy Tracker', {
-                                body: `Time for your ${label.toLowerCase()}`,
-                                icon: 'data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iMTI4IiBoZWlnaHQ9IjEyOCIgdmlld0JveD0iMCAwIDEyOCAxMjgiIGZpbGw9IiMxYTM2NWQiPgogIDxjaXJjbGUgY3g9IjY0IiBjeT0iNjQiIHI9IjIwIi8+PC9zdmc+',
-                                tag: 'energy-checkin'
-                            });
-                        }
-                    }, delay);
+                const blob = new Blob([swCode], { type: 'application/javascript' });
+                const swUrl = URL.createObjectURL(blob);
+                
+                const registration = await navigator.serviceWorker.register(swUrl);
+                console.log('Service Worker registered:', registration);
+                
+                document.getElementById('cache-status').textContent = 'Active';
+            } catch (error) {
+                console.log('Service Worker registration failed:', error);
+                document.getElementById('cache-status').textContent = 'Not available';
+            }
+        }
+
+        // Create manifest dynamically
+        const manifest = {
+            name: "Energy Tracker",
+            short_name: "EnergyTracker",
+            description: "Professional Energy Tracking App",
+            start_url: "/",
+            display: "standalone",
+            background_color: "#ffffff",
+            theme_color: "#1a365d",
+            icons: [
+                {
+                    src: "data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iMTI4IiBoZWlnaHQ9IjEyOCIgdmlld0JveD0iMCAwIDEyOCAxMjgiIGZpbGw9IiMxYTM2NWQiPgogIDxjaXJjbGUgY3g9IjY0IiBjeT0iNjQiIHI9IjIwIi8+PC9zdmc+",
+                    sizes: "128x128",
+                    type: "image/svg+xml"
+                },
+                {
+                    src: "data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iNTEyIiBoZWlnaHQ9IjUxMiIgdmlld0JveD0iMCAwIDUxMiA1MTIiIGZpbGw9IiMxYTM2NWQiPgogIDxjaXJjbGUgY3g9IjI1NiIgY3k9IjI1NiIgcj0iODAiLz48L3N2Zz4=",
+                    sizes: "512x512",
+                    type: "image/svg+xml"
                 }
-            });
-        }
+            ],
+            orientation: "portrait",
+            categories: ["healthfitness", "productivity"]
+        };
 
-        function clearNotifications() {
-            // Clear any pending notifications
-            // In a full PWA with service workers, you'd clear scheduled notifications
-        }
-
-        // Initialize energy description on load
-        updateEnergyDescription();
-    </script>
-</body>
-</html>
+        const manifestBlob = new Blob([JSON.stringify(manifest)], { type: 'application/json' });
+        const manifestURL = URL.createObjectURL(manifestBlob);
